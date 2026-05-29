@@ -1,9 +1,12 @@
 FROM ghcr.io/astral-sh/uv:bookworm-slim
 
-# Copy the project into the image
-ADD . /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Sync the project into a new environment, asserting the lockfile is up to date
+ENV UV_PYTHON=3.12
+
+ADD . /app
 WORKDIR /app
 RUN uv sync --locked
 

@@ -20,32 +20,59 @@ def convert_claude_to_openai(
     # Convert messages
     openai_messages = []
 
-    # Add system message if present
+    # Add system message if present.
+    # Collect both the top-level `system` field and any system-role messages
+    # that appear inside the `messages` array (Claude Code 2.1.154+ injects a
+    # system message into the array), then merge them into a single system
+    # message at the very beginning. Many OpenAI-compatible backends require
+    # all system content to be the first message.
+    system_parts: List[str] = []
+
+    # (1) Top-level system field
     if claude_request.system:
-        system_text = ""
         if isinstance(claude_request.system, str):
-            system_text = claude_request.system
+            if claude_request.system.strip():
+                system_parts.append(claude_request.system.strip())
         elif isinstance(claude_request.system, list):
-            text_parts = []
             for block in claude_request.system:
                 if hasattr(block, "type") and block.type == Constants.CONTENT_TEXT:
-                    text_parts.append(block.text)
+                    system_parts.append(block.text)
                 elif (
                     isinstance(block, dict)
                     and block.get("type") == Constants.CONTENT_TEXT
                 ):
-                    text_parts.append(block.get("text", ""))
-            system_text = "\n\n".join(text_parts)
+                    system_parts.append(block.get("text", ""))
 
-        if system_text.strip():
-            openai_messages.append(
-                {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
-            )
+    # (2) System-role messages embedded in the messages array
+    for m in claude_request.messages:
+        if m.role == Constants.ROLE_SYSTEM:
+            if isinstance(m.content, str):
+                system_parts.append(m.content)
+            elif isinstance(m.content, list):
+                for block in m.content:
+                    if getattr(block, "type", None) == Constants.CONTENT_TEXT:
+                        system_parts.append(block.text)
+                    elif (
+                        isinstance(block, dict)
+                        and block.get("type") == Constants.CONTENT_TEXT
+                    ):
+                        system_parts.append(block.get("text", ""))
+
+    system_text = "\n\n".join(p for p in system_parts if p and p.strip())
+    if system_text.strip():
+        openai_messages.append(
+            {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
+        )
 
     # Process Claude messages
     i = 0
     while i < len(claude_request.messages):
         msg = claude_request.messages[i]
+
+        if msg.role == Constants.ROLE_SYSTEM:
+            # Already merged into the leading system message above.
+            i += 1
+            continue
 
         if msg.role == Constants.ROLE_USER:
             openai_message = convert_claude_user_message(msg)
@@ -133,7 +160,7 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
     """Convert Claude user message to OpenAI format."""
     if msg.content is None:
         return {"role": Constants.ROLE_USER, "content": ""}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_USER, "content": msg.content}
 
@@ -172,7 +199,7 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
 
     if msg.content is None:
         return {"role": Constants.ROLE_ASSISTANT, "content": None}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
 
